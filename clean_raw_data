@@ -1,0 +1,23 @@
+library(readxl)
+library(dplyr)
+library(janitor)
+library(writexl)
+
+setwd("/Users/Apple/Desktop")  # Adjust to your own labtop's local environment
+
+# Read all columns as character
+data <- read_excel("Raw Dataset - FBQ.xlsx", col_types = "text")
+
+# Replace "x" and "" (empty string) with NA
+data[data == "x" | data == ""] <- NA
+
+# Clean column names
+data <- data %>% clean_names()
+data <- data %>% mutate(across(everything(), ~ suppressWarnings(as.numeric(.x))))
+# data$species <- as.character(data$species)  # Example, adjust as needed
+data <- data %>% remove_empty("rows") %>% remove_empty("cols")
+
+# Export cleaned data
+write_xlsx(data, "Cleaned_Dataset_FBQ.xlsx")
+
+cat("Data cleaning complete! All 'x' and blank entries treated as NA. Cleaned file saved as 'Cleaned_Dataset_FBQ.xlsx'\n")
