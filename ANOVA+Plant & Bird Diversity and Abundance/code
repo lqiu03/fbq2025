@@ -1,0 +1,154 @@
+library(tidyverse)
+library(ggplot2)
+library(janitor)
+library(car)  # For Levene's test
+library(broom)  # For tidy ANOVA results
+library(ggpubr) # For adding p-values to plots
+
+# Read the data and clean column names
+data <- read.csv("FBQ_with_correct_bins.csv", check.names = FALSE) %>%
+  clean_names() %>%
+  # Clean up the correct_bin values
+  mutate(
+    correct_bin = case_when(
+      str_detect(tolower(correct_bin), "control") ~ "Control",
+      str_detect(tolower(correct_bin), "n/a") ~ "Control",
+      correct_bin %in% c("", " ") ~ NA_character_,
+      TRUE ~ correct_bin
+    )
+  ) %>%
+  # Remove rows with NA in correct_bin
+  filter(!is.na(correct_bin)) %>%
+  # Convert numeric columns and handle any non-numeric values
+  mutate(across(c(tree_abundance, tree_diversity, 
+                  shrub_abundance, shrub_diversity,
+                  herb_flower_abundance, herb_flower_diversity,
+                  total_individuals, total_species, observed_species),
+                ~as.numeric(str_replace_all(., "[^0-9.]", ""))))
+
+# Set the correct order for fire recovery bins
+bin_order <- c("Control", "0-2", "2-5", "5-10", "10-25")
+
+# Function to run ANOVA and create summary
+run_anova_analysis <- function(data, dv, group_var) {
+  # Remove NA values for the dependent variable
+  clean_data <- data %>%
+    filter(!is.na(!!sym(dv))) %>%
+    mutate(!!sym(group_var) := factor(!!sym(group_var), levels = bin_order))
+  
+  # Run ANOVA
+  formula <- as.formula(paste(dv, "~", group_var))
+  aov_result <- aov(formula, data = clean_data)
+  
+  # Get summary statistics
+  group_stats <- clean_data %>%
+    group_by(!!sym(group_var)) %>%
+    summarise(
+      mean = mean(!!sym(dv), na.rm = TRUE),
+      sd = sd(!!sym(dv), na.rm = TRUE),
+      n = n(),
+      se = sd/sqrt(n),
+      .groups = 'drop'
+    )
+  
+  # Return results
+  list(
+    aov_result = aov_result,
+    summary = summary(aov_result),
+    stats = group_stats
+  )
+}
+
+# Plant Metrics Analysis
+plant_metrics <- list()
+
+# Diversity metrics
+plant_metrics$tree_div <- run_anova_analysis(data, "tree_diversity", "correct_bin")
+plant_metrics$shrub_div <- run_anova_analysis(data, "shrub_diversity", "correct_bin")
+plant_metrics$herb_div <- run_anova_analysis(data, "herb_flower_diversity", "correct_bin")
+
+# Abundance metrics
+plant_metrics$tree_abund <- run_anova_analysis(data, "tree_abundance", "correct_bin")
+plant_metrics$shrub_abund <- run_anova_analysis(data, "shrub_abundance", "correct_bin")
+plant_metrics$herb_abund <- run_anova_analysis(data, "herb_flower_abundance", "correct_bin")
+
+# Bird Metrics Analysis
+bird_metrics <- list()
+bird_metrics$total_ind <- run_anova_analysis(data, "total_individuals", "correct_bin")
+bird_metrics$total_species <- run_anova_analysis(data, "total_species", "correct_bin")
+bird_metrics$observed_species <- run_anova_analysis(data, "observed_species", "correct_bin")
+
+# Create ANOVA results summary
+sink("anova_results.txt")
+cat("ANOVA Results Summary\n\n")
+
+cat("\nPlant Diversity Metrics:\n")
+cat("\nTree Diversity:\n")
+print(summary(plant_metrics$tree_div$aov_result))
+cat("\nShrub Diversity:\n")
+print(summary(plant_metrics$shrub_div$aov_result))
+cat("\nHerb/Flower Diversity:\n")
+print(summary(plant_metrics$herb_div$aov_result))
+
+cat("\nPlant Abundance Metrics:\n")
+cat("\nTree Abundance:\n")
+print(summary(plant_metrics$tree_abund$aov_result))
+cat("\nShrub Abundance:\n")
+print(summary(plant_metrics$shrub_abund$aov_result))
+cat("\nHerb/Flower Abundance:\n")
+print(summary(plant_metrics$herb_abund$aov_result))
+
+cat("\nBird Metrics:\n")
+cat("\nTotal Individuals:\n")
+print(summary(bird_metrics$total_ind$aov_result))
+cat("\nTotal Species:\n")
+print(summary(bird_metrics$total_species$aov_result))
+cat("\nObserved Species:\n")
+print(summary(bird_metrics$observed_species$aov_result))
+sink()
+
+# Function to create variance plot
+create_variance_plot <- function(metric_data, title, y_label) {
+  ggplot(metric_data$stats %>% arrange(factor(correct_bin, levels = bin_order)), 
+         aes(x = factor(correct_bin, levels = bin_order), y = mean)) +
+    geom_bar(stat = "identity", fill = "lightblue", alpha = 0.7) +
+    geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.2) +
+    labs(title = title,
+         x = "Fire Recovery Stage (Years)",
+         y = y_label) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+# Create variance plots for plant metrics
+plant_div_plots <- list(
+  tree = create_variance_plot(plant_metrics$tree_div, "Tree Diversity Variance", "Mean Tree Diversity (±SE)"),
+  shrub = create_variance_plot(plant_metrics$shrub_div, "Shrub Diversity Variance", "Mean Shrub Diversity (±SE)"),
+  herb = create_variance_plot(plant_metrics$herb_div, "Herb/Flower Diversity Variance", "Mean Herb/Flower Diversity (±SE)")
+)
+
+plant_abund_plots <- list(
+  tree = create_variance_plot(plant_metrics$tree_abund, "Tree Abundance Variance", "Mean Tree Abundance (±SE)"),
+  shrub = create_variance_plot(plant_metrics$shrub_abund, "Shrub Abundance Variance", "Mean Shrub Abundance (±SE)"),
+  herb = create_variance_plot(plant_metrics$herb_abund, "Herb/Flower Abundance Variance", "Mean Herb/Flower Abundance (±SE)")
+)
+
+# Create variance plots for bird metrics
+bird_plots <- list(
+  total_ind = create_variance_plot(bird_metrics$total_ind, "Bird Total Individuals Variance", "Mean Total Individuals (±SE)"),
+  total_species = create_variance_plot(bird_metrics$total_species, "Bird Total Species Variance", "Mean Total Species (±SE)"),
+  observed_species = create_variance_plot(bird_metrics$observed_species, "Bird Observed Species Variance", "Mean Observed Species (±SE)")
+)
+
+# Save plots
+ggsave("plant_diversity_variance.png", 
+       gridExtra::grid.arrange(plant_div_plots$tree, plant_div_plots$shrub, plant_div_plots$herb, ncol = 1),
+       height = 12, width = 8)
+
+ggsave("plant_abundance_variance.png",
+       gridExtra::grid.arrange(plant_abund_plots$tree, plant_abund_plots$shrub, plant_abund_plots$herb, ncol = 1),
+       height = 12, width = 8)
+
+ggsave("bird_metrics_variance.png",
+       gridExtra::grid.arrange(bird_plots$total_ind, bird_plots$total_species, bird_plots$observed_species, ncol = 1),
+       height = 12, width = 8) 
