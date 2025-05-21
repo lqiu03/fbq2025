@@ -1,0 +1,69 @@
+library(readr)
+library(ggplot2)
+library(dplyr)
+
+# Read data
+df <- read_csv("FBQ_with_correct_bins.csv")
+
+# Recode bin categories
+df$Correct_Bin <- factor(df$Correct_Bin, 
+                        levels=c("n/a (control)", "0-2", "2-5", "5-10", "10-25"))
+df$Correct_Bin <- recode(df$Correct_Bin, "n/a (control)" = "Control")
+df$Correct_Bin <- factor(df$Correct_Bin, 
+                        levels=c("Control", "0-2", "2-5", "5-10", "10-25"))
+
+# Calculate summary statistics
+sum_data <- df %>%
+  group_by(Correct_Bin) %>%
+  summarise(
+    mean_birds = mean(`Total Individuals`, na.rm=TRUE),
+    se_birds = sd(`Total Individuals`, na.rm=TRUE)/sqrt(n()),
+    mean_plant_abund = mean(`Total Abundance`, na.rm=TRUE),
+    se_plant_abund = sd(`Total Abundance`, na.rm=TRUE)/sqrt(n()),
+    mean_plant_rich = mean(`Total Diversity`, na.rm=TRUE),
+    se_plant_rich = sd(`Total Diversity`, na.rm=TRUE)/sqrt(n())
+  )
+
+# Bird abundance plot
+p1 <- ggplot(sum_data, aes(x=Correct_Bin, y=mean_birds)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin=mean_birds-se_birds, ymax=mean_birds+se_birds), width=0.2) +
+  theme_minimal() +
+  labs(title="Bird Abundance Across Fire Recovery Stages",
+       x="Time Since Fire (years)",
+       y="Mean Bird Abundance (± SE)") +
+  theme(plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+        axis.title = element_text(size=12),
+        axis.text = element_text(size=10))
+
+ggsave("bird_plot.png", p1, width=8, height=6)
+
+# Plant abundance plot
+p2 <- ggplot(sum_data, aes(x=Correct_Bin, y=mean_plant_abund)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin=mean_plant_abund-se_plant_abund, 
+                    ymax=mean_plant_abund+se_plant_abund), width=0.2) +
+  theme_minimal() +
+  labs(title="Plant Abundance Across Fire Recovery Stages",
+       x="Time Since Fire (years)",
+       y="Mean Plant Abundance (± SE)") +
+  theme(plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+        axis.title = element_text(size=12),
+        axis.text = element_text(size=10))
+
+ggsave("plant_abundance_plot.png", p2, width=8, height=6)
+
+# Plant richness plot
+p3 <- ggplot(sum_data, aes(x=Correct_Bin, y=mean_plant_rich)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin=mean_plant_rich-se_plant_rich, 
+                    ymax=mean_plant_rich+se_plant_rich), width=0.2) +
+  theme_minimal() +
+  labs(title="Plant Species Richness Across Fire Recovery Stages",
+       x="Time Since Fire (years)",
+       y="Mean Plant Species Richness (± SE)") +
+  theme(plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+        axis.title = element_text(size=12),
+        axis.text = element_text(size=10))
+
+ggsave("plant_richness_plot.png", p3, width=8, height=6) 
