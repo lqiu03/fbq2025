@@ -1,0 +1,215 @@
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(lme4)
+library(gridExtra)
+
+# Load and prepare data
+df <- read_excel("Cleaned_Dataset_FBQ.xlsx")
+df$Survey_Year <- as.numeric(format(df$`Date of Visit`, "%Y"))
+df$Year_Fire <- as.numeric(df$`Year of Fire`)
+df$Years_Since_Fire <- df$Survey_Year - df$Year_Fire
+df$Fire_Status <- ifelse(is.na(df$Years_Since_Fire), "Control", "Fire_Affected")
+
+# Prepare datasets
+fire_data <- df %>%
+  filter(Fire_Status == "Fire_Affected") %>%
+  filter(!is.na(Years_Since_Fire) & 
+         !is.na(`Total Individuals`) & !is.na(`Total Species`) &
+         !is.na(`Total Abundance`) & !is.na(`Total Diversity`)) %>%
+  mutate(
+    Bird_Abundance = as.numeric(`Total Individuals`),
+    Bird_Diversity = as.numeric(`Total Species`),
+    Plant_Abundance = as.numeric(`Total Abundance`),
+    Plant_Diversity = as.numeric(`Total Diversity`),
+    Fire_Name = factor(`Fire Name`),
+    Location = `Location Name`,
+    Time = Years_Since_Fire
+  ) %>%
+  filter(!is.na(Bird_Abundance) & !is.na(Bird_Diversity) & 
+         !is.na(Plant_Abundance) & !is.na(Plant_Diversity))
+
+control_data <- df %>%
+  filter(Fire_Status == "Control") %>%
+  filter(!is.na(`Total Individuals`) & !is.na(`Total Species`) &
+         !is.na(`Total Abundance`) & !is.na(`Total Diversity`)) %>%
+  mutate(
+    Bird_Abundance = as.numeric(`Total Individuals`),
+    Bird_Diversity = as.numeric(`Total Species`),
+    Plant_Abundance = as.numeric(`Total Abundance`),
+    Plant_Diversity = as.numeric(`Total Diversity`)
+  ) %>%
+  filter(!is.na(Bird_Abundance) & !is.na(Bird_Diversity) & 
+         !is.na(Plant_Abundance) & !is.na(Plant_Diversity))
+
+# Calculate control means
+control_means <- control_data %>%
+  summarise(
+    Bird_Abundance_Control = mean(Bird_Abundance, na.rm = TRUE),
+    Bird_Diversity_Control = mean(Bird_Diversity, na.rm = TRUE),
+    Plant_Abundance_Control = mean(Plant_Abundance, na.rm = TRUE),
+    Plant_Diversity_Control = mean(Plant_Diversity, na.rm = TRUE)
+  )
+
+cat("=== IMPROVED ANALYSIS WITH MIXED EFFECTS MODELS ===\n")
+cat("Fire-affected observations:", nrow(fire_data), "\n")
+cat("Control observations:", nrow(control_data), "\n")
+
+# Fit best-performing mixed effects models
+model_bird_abund <- lmer(Bird_Abundance ~ Time + I(Time^2) + (1|Fire_Name), data = fire_data)
+r2_bird_abund <- cor(fitted(model_bird_abund), fire_data$Bird_Abundance)^2
+
+model_bird_div <- lmer(Bird_Diversity ~ Time + I(Time^2) + (1|Fire_Name), data = fire_data)
+r2_bird_div <- cor(fitted(model_bird_div), fire_data$Bird_Diversity)^2
+
+model_plant_abund <- lmer(Plant_Abundance ~ Time + I(Time^2) + (1|Fire_Name), data = fire_data)
+r2_plant_abund <- cor(fitted(model_plant_abund), fire_data$Plant_Abundance)^2
+
+model_plant_div <- lmer(Plant_Diversity ~ Time + I(Time^2) + (1|Fire_Name), data = fire_data)
+r2_plant_div <- cor(fitted(model_plant_div), fire_data$Plant_Diversity)^2
+
+cat("Model R² values:\n")
+cat("Bird Abundance:", round(r2_bird_abund, 4), "\n")
+cat("Bird Diversity:", round(r2_bird_div, 4), "\n") 
+cat("Plant Abundance:", round(r2_plant_abund, 4), "\n")
+cat("Plant Diversity:", round(r2_plant_div, 4), "\n\n")
+
+# Create prediction data for plotting
+time_seq <- seq(0, 22, length.out = 100)
+pred_data <- data.frame(Time = time_seq, Fire_Name = fire_data$Fire_Name[1])
+
+# Generate predictions using population-level effects only
+pred_bird_abund <- predict(model_bird_abund, newdata = pred_data, re.form = NA)
+pred_bird_div <- predict(model_bird_div, newdata = pred_data, re.form = NA)
+pred_plant_abund <- predict(model_plant_abund, newdata = pred_data, re.form = NA)
+pred_plant_div <- predict(model_plant_div, newdata = pred_data, re.form = NA)
+
+# Enhanced theme with larger fonts
+theme_enhanced <- theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5, margin = margin(b = 20)),
+    axis.title.x = element_text(size = 18, face = "bold", margin = margin(t = 15)),
+    axis.title.y = element_text(size = 18, face = "bold", margin = margin(r = 15)),
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 16),
+    legend.key.height = unit(1.8, "cm"),
+    legend.key.width = unit(1.5, "cm"),
+    panel.grid.minor = element_blank(),
+    plot.caption = element_text(size = 14, hjust = 0.5, margin = margin(t = 15)),
+    plot.margin = margin(20, 20, 20, 20),
+    strip.text = element_text(size = 18, face = "bold")
+  )
+
+# Figure 2A - Species Diversity Recovery
+p_diversity <- ggplot() +
+  # Data points
+  geom_point(data = fire_data, aes(x = Time, y = Bird_Diversity, color = "Birds"), 
+             alpha = 0.6, size = 2) +
+  geom_point(data = fire_data, aes(x = Time, y = Plant_Diversity, color = "Plants"), 
+             alpha = 0.6, size = 2) +
+  # Fitted curves
+  geom_line(data = data.frame(Time = time_seq, Bird_Diversity = pred_bird_div), 
+            aes(x = Time, y = Bird_Diversity, color = "Birds"), linewidth = 2.5) +
+  geom_line(data = data.frame(Time = time_seq, Plant_Diversity = pred_plant_div), 
+            aes(x = Time, y = Plant_Diversity, color = "Plants"), linewidth = 2.5) +
+  # Control reference lines
+  geom_hline(yintercept = control_means$Bird_Diversity_Control, 
+             color = "#1F78B4", linetype = "dashed", linewidth = 2, alpha = 0.8) +
+  geom_hline(yintercept = control_means$Plant_Diversity_Control, 
+             color = "#33A02C", linetype = "dashed", linewidth = 2, alpha = 0.8) +
+  scale_color_manual(
+    name = "Taxa",
+    values = c("Birds" = "#1F78B4", "Plants" = "#33A02C"),
+    labels = c("Birds", "Plants")
+  ) +
+  labs(
+    title = "Figure 2A. Species Diversity Recovery After Fire",
+    x = "Years Since Fire",
+    y = "Species Diversity",
+    caption = paste("Mixed Effects Models: Birds R² =", round(r2_bird_div, 3), 
+                   ", Plants R² =", round(r2_plant_div, 3),
+                   "\nDashed lines represent control site means")
+  ) +
+  theme_enhanced +
+  guides(color = guide_legend(override.aes = list(size = 4)))
+
+# Figure 2B - Abundance Recovery  
+p_abundance <- ggplot() +
+  # Data points
+  geom_point(data = fire_data, aes(x = Time, y = Bird_Abundance, color = "Birds"), 
+             alpha = 0.6, size = 2) +
+  geom_point(data = fire_data, aes(x = Time, y = Plant_Abundance, color = "Plants"), 
+             alpha = 0.6, size = 2) +
+  # Fitted curves
+  geom_line(data = data.frame(Time = time_seq, Bird_Abundance = pred_bird_abund), 
+            aes(x = Time, y = Bird_Abundance, color = "Birds"), linewidth = 2.5) +
+  geom_line(data = data.frame(Time = time_seq, Plant_Abundance = pred_plant_abund), 
+            aes(x = Time, y = Plant_Abundance, color = "Plants"), linewidth = 2.5) +
+  # Control reference lines
+  geom_hline(yintercept = control_means$Bird_Abundance_Control, 
+             color = "#1F78B4", linetype = "dashed", linewidth = 2, alpha = 0.8) +
+  geom_hline(yintercept = control_means$Plant_Abundance_Control, 
+             color = "#33A02C", linetype = "dashed", linewidth = 2, alpha = 0.8) +
+  scale_color_manual(
+    name = "Taxa",
+    values = c("Birds" = "#1F78B4", "Plants" = "#33A02C"),
+    labels = c("Birds", "Plants")
+  ) +
+  labs(
+    title = "Figure 2B. Abundance Recovery After Fire",
+    x = "Years Since Fire", 
+    y = "Total Abundance",
+    caption = paste("Mixed Effects Models: Birds R² =", round(r2_bird_abund, 3), 
+                   ", Plants R² =", round(r2_plant_abund, 3),
+                   "\nDashed lines represent control site means")
+  ) +
+  theme_enhanced +
+  guides(color = guide_legend(override.aes = list(size = 4)))
+
+# Create combined plot
+combined_plot <- grid.arrange(
+  p_diversity, p_abundance, 
+  ncol = 2,
+  top = textGrob("Post-Fire Ecological Recovery Patterns", 
+                 gp = gpar(fontsize = 24, fontface = "bold"),
+                 vjust = 1, hjust = 0.5)
+)
+
+# Save individual plots
+ggsave("figure_2A_diversity.png", p_diversity, width = 12, height = 8, dpi = 300)
+ggsave("figure_2B_abundance.png", p_abundance, width = 12, height = 8, dpi = 300)
+
+# Save combined plot
+ggsave("figure_2_combined.png", combined_plot, width = 24, height = 10, dpi = 300)
+
+# Print summary
+cat("=== FINAL MODEL PERFORMANCE ===\n")
+comparison <- data.frame(
+  Figure = c("2A - Bird Diversity", "2A - Plant Diversity", "2B - Bird Abundance", "2B - Plant Abundance"),
+  R_squared = c(r2_bird_div, r2_plant_div, r2_bird_abund, r2_plant_abund),
+  Improvement_over_quadratic = c(
+    r2_bird_div - 0.150,
+    r2_plant_div - 0.198, 
+    r2_bird_abund - 0.043,
+    r2_plant_abund - 0.094
+  )
+)
+
+comparison$Percent_Improvement <- round((comparison$Improvement_over_quadratic / 
+                                        c(0.150, 0.198, 0.043, 0.094)) * 100, 1)
+
+print(comparison)
+
+cat("\n✅ Generated enhanced figures:\n")
+cat("- figure_2A_diversity.png (Individual diversity plot)\n")
+cat("- figure_2B_abundance.png (Individual abundance plot)\n") 
+cat("- figure_2_combined.png (Combined publication-ready figure)\n")
+cat("\nFont enhancements:\n")
+cat("- Titles: 20pt bold\n")
+cat("- Axis labels: 18pt bold\n")
+cat("- Axis text: 16pt\n")
+cat("- Legend: 16pt\n")
+cat("- Captions: 14pt\n")
+cat("- Overall title: 24pt bold\n") 
