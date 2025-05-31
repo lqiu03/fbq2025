@@ -1,0 +1,179 @@
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+
+# Load dataset
+df <- read_excel("Cleaned_Dataset_FBQ.xlsx")
+
+# Calculate years since fire
+df$Survey_Year <- as.numeric(format(df$`Date of Visit`, "%Y"))
+df$Year_Fire <- as.numeric(df$`Year of Fire`)
+df$Years_Since_Fire <- df$Survey_Year - df$Year_Fire
+df$Fire_Status <- ifelse(is.na(df$Years_Since_Fire), "Control", "Fire_Affected")
+
+# Check available plant functional type columns
+cat("Available columns:\n")
+print(colnames(df))
+
+# Create working dataset with plant functional types
+plant_data <- df %>%
+  filter(Fire_Status == "Fire_Affected") %>%
+  filter(!is.na(Years_Since_Fire)) %>%
+  mutate(
+    Tree_Abundance = as.numeric(`Tree Abundance`),
+    Tree_Diversity = as.numeric(`Tree Diversity`),
+    Shrub_Abundance = as.numeric(`Shrub Abundance`),
+    Shrub_Diversity = as.numeric(`Shrub Diversity`),
+    Herb_Abundance = as.numeric(`Herb/Flower Abundance`),
+    Herb_Diversity = as.numeric(`Herb/Flower Diversity`),
+    Time_Since_Fire = Years_Since_Fire
+  ) %>%
+  filter(!is.na(Tree_Abundance) & !is.na(Tree_Diversity) & 
+         !is.na(Shrub_Abundance) & !is.na(Shrub_Diversity) &
+         !is.na(Herb_Abundance) & !is.na(Herb_Diversity)) %>%
+  select(Time_Since_Fire, Tree_Abundance, Tree_Diversity, 
+         Shrub_Abundance, Shrub_Diversity, Herb_Abundance, Herb_Diversity)
+
+cat("Plant data ready:", nrow(plant_data), "observations\n")
+cat("Time range:", min(plant_data$Time_Since_Fire), "-", max(plant_data$Time_Since_Fire), "years\n")
+
+# Create time bins for recovery stages
+plant_data$Recovery_Stage <- cut(plant_data$Time_Since_Fire, 
+                                breaks = c(-1, 2, 5, 10, 20, 25),
+                                labels = c("0-2", "2-5", "5-10", "10-20", "20+"),
+                                include.lowest = TRUE)
+
+# Calculate mean values by recovery stage for diversity
+diversity_summary <- plant_data %>%
+  group_by(Recovery_Stage) %>%
+  summarise(
+    Trees = mean(Tree_Diversity, na.rm = TRUE),
+    Shrubs = mean(Shrub_Diversity, na.rm = TRUE),
+    Herbs_Flowers = mean(Herb_Diversity, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  pivot_longer(cols = c(Trees, Shrubs, Herbs_Flowers), 
+               names_to = "Plant_Type", 
+               values_to = "Mean_Diversity")
+
+# Calculate mean values by recovery stage for abundance
+abundance_summary <- plant_data %>%
+  group_by(Recovery_Stage) %>%
+  summarise(
+    Trees = mean(Tree_Abundance, na.rm = TRUE),
+    Shrubs = mean(Shrub_Abundance, na.rm = TRUE),
+    Herbs_Flowers = mean(Herb_Abundance, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  pivot_longer(cols = c(Trees, Shrubs, Herbs_Flowers), 
+               names_to = "Plant_Type", 
+               values_to = "Mean_Abundance")
+
+# Set factor levels for consistent ordering
+diversity_summary$Plant_Type <- factor(diversity_summary$Plant_Type, 
+                                      levels = c("Trees", "Shrubs", "Herbs_Flowers"))
+abundance_summary$Plant_Type <- factor(abundance_summary$Plant_Type, 
+                                      levels = c("Trees", "Shrubs", "Herbs_Flowers"))
+
+# Color palette
+plant_colors <- c("Trees" = "#1B5E20",        # Dark green
+                  "Shrubs" = "#66BB6A",       # Light green  
+                  "Herbs_Flowers" = "#FFD54F") # Yellow
+
+# Enhanced theme
+theme_plant <- theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 14, face = "bold"),
+    axis.text = element_text(size = 12),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 11),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+
+# Create diversity plot
+p_diversity <- ggplot(diversity_summary, aes(x = Recovery_Stage, y = Mean_Diversity, fill = Plant_Type)) +
+  geom_col(position = "stack", width = 0.7) +
+  scale_fill_manual(name = "Plant Type", 
+                    values = plant_colors,
+                    labels = c("Trees", "Shrubs", "Herbs/Flowers")) +
+  labs(
+    title = "Plant Species Diversity Across Fire Recovery Stages",
+    x = "Years Since Fire",
+    y = "Mean Species Diversity"
+  ) +
+  theme_plant +
+  guides(fill = guide_legend(reverse = TRUE))
+
+# Create abundance plot
+p_abundance <- ggplot(abundance_summary, aes(x = Recovery_Stage, y = Mean_Abundance, fill = Plant_Type)) +
+  geom_col(position = "stack", width = 0.7) +
+  scale_fill_manual(name = "Plant Type", 
+                    values = plant_colors,
+                    labels = c("Trees", "Shrubs", "Herbs/Flowers")) +
+  labs(
+    title = "Plant Abundance Across Fire Recovery Stages",
+    x = "Years Since Fire",
+    y = "Mean Abundance"
+  ) +
+  theme_plant +
+  guides(fill = guide_legend(reverse = TRUE))
+
+# Create combined plot
+combined_plant_plot <- grid.arrange(
+  p_diversity, p_abundance,
+  ncol = 2,
+  top = grid::textGrob("Figure 5. Temporal patterns in plant functional types across fire recovery stages", 
+                      gp = grid::gpar(fontsize = 18, fontface = "bold"))
+)
+
+# Save plots
+ggsave("plant_diversity_by_stage.png", p_diversity, width = 10, height = 6, dpi = 300)
+ggsave("plant_abundance_by_stage.png", p_abundance, width = 10, height = 6, dpi = 300)
+ggsave("figure_5_plant_functional_types.png", combined_plant_plot, width = 16, height = 8, dpi = 300)
+
+# Print summary statistics
+cat("\n=== DIVERSITY SUMMARY BY RECOVERY STAGE ===\n")
+diversity_wide <- diversity_summary %>%
+  pivot_wider(names_from = Plant_Type, values_from = Mean_Diversity)
+print(diversity_wide)
+
+cat("\n=== ABUNDANCE SUMMARY BY RECOVERY STAGE ===\n")
+abundance_wide <- abundance_summary %>%
+  pivot_wider(names_from = Plant_Type, values_from = Mean_Abundance)
+print(abundance_wide)
+
+# Calculate totals for each stage
+diversity_totals <- diversity_summary %>%
+  group_by(Recovery_Stage) %>%
+  summarise(Total_Diversity = sum(Mean_Diversity), .groups = 'drop')
+
+abundance_totals <- abundance_summary %>%
+  group_by(Recovery_Stage) %>%
+  summarise(Total_Abundance = sum(Mean_Abundance), .groups = 'drop')
+
+cat("\n=== TOTAL DIVERSITY BY STAGE ===\n")
+print(diversity_totals)
+
+cat("\n=== TOTAL ABUNDANCE BY STAGE ===\n")
+print(abundance_totals)
+
+# Identify patterns
+cat("\n=== KEY PATTERNS ===\n")
+max_div_stage <- diversity_totals$Recovery_Stage[which.max(diversity_totals$Total_Diversity)]
+min_div_stage <- diversity_totals$Recovery_Stage[which.min(diversity_totals$Total_Diversity)]
+max_abund_stage <- abundance_totals$Recovery_Stage[which.max(abundance_totals$Total_Abundance)]
+min_abund_stage <- abundance_totals$Recovery_Stage[which.min(abundance_totals$Total_Abundance)]
+
+cat("Peak diversity occurs in:", as.character(max_div_stage), "years stage\n")
+cat("Minimum diversity occurs in:", as.character(min_div_stage), "years stage\n")
+cat("Peak abundance occurs in:", as.character(max_abund_stage), "years stage\n")
+cat("Minimum abundance occurs in:", as.character(min_abund_stage), "years stage\n")
+
+cat("\nPlots saved:\n")
+cat("- plant_diversity_by_stage.png\n")
+cat("- plant_abundance_by_stage.png\n")
+cat("- figure_5_plant_functional_types.png (combined)\n") 
